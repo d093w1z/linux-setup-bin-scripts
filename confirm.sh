@@ -27,4 +27,15 @@ confirm() {
 	echo -e "$yes\n$no" | confirm_cmd
 }
 
-confirm
+# Execute Command
+run_cmd() {
+	selected="$(confirm)"
+  echo $selected
+	if [[ "$selected" == "$yes" ]]; then
+		exit 0
+	else
+		exit -1
+	fi
+}
+
+run_cmd
