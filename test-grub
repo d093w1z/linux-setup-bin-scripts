@@ -1,0 +1,8 @@
+#!/bin/bash
+
+entries=($(awk -F"'" '/menuentry / {print $2}' /boot/grub/grub.cfg))
+
+echo "Detected GRUB entries:"
+for i in "${!entries[@]}"; do
+    echo "[$i]: ${entries[$i]}"
+done

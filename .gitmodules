@@ -1,0 +1,12 @@
+[submodule "logiops"]
+	path = logiops
+	url = https://github.com/PixlOne/logiops.git
+[submodule "polybar-now-playing"]
+	path = polybar-now-playing
+	url = https://github.com/d093w1z/polybar-now-playing
+[submodule "xwinwrap"]
+	path = xwinwrap
+	url = https://github.com/ujjwal96/xwinwrap.git
+[submodule "siji"]
+	path = siji
+	url = https://github.com/stark/siji

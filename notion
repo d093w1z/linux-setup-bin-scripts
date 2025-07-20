@@ -1,0 +1,5 @@
+#!/bin/bash
+
+qutebrowser notion.so
+sleep 5
+xdotool key ctrl+shift+l

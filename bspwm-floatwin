@@ -1,0 +1,4 @@
+#!/bin/bash
+
+bspc rule -a \* --one-shot state=floating
+#bspc rule -r \* -o state=floating 

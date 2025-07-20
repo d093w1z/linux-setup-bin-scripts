@@ -1,0 +1,44 @@
+#!/bin/bash
+
+# Get monitor boundaries using xrandr
+monitors=$(xrandr --query | grep ' connected' | awk '{print $3}')
+
+# Array to hold monitor boundaries
+monitor_bounds=()
+
+for monitor in $monitors; do
+    IFS='+x' read -r width height x y <<< "$monitor"
+    monitor_bounds+=("$x" "$y" "$width" "$height")
+done
+
+CORNER_THRESHOLD=10 # Pixels from the edge to trigger corner catching
+
+while true; do
+    # Get current mouse position
+    eval $(xdotool getmouselocation --shell)
+    
+    for ((i=0; i<${#monitor_bounds[@]}; i+=4)); do
+        x_start=${monitor_bounds[i]}
+        y_start=${monitor_bounds[i+1]}
+        width=${monitor_bounds[i+2]}
+        height=${monitor_bounds[i+3]}
+        x_end=$((x_start + width))
+        y_end=$((y_start + height))
+
+        # Check if the mouse is near the edge between monitors
+        if ([[ $X -ge $((x_start - CORNER_THRESHOLD)) && $X -le $((x_start + CORNER_THRESHOLD)) ]] ||
+            [[ $X -ge $((x_end - CORNER_THRESHOLD)) && $X -le $((x_end + CORNER_THRESHOLD)) ]]) &&
+            ([[ $Y -ge $y_start && $Y -le $y_end ]]); then
+            # Halt or slow down the mouse movement
+            xdotool mousemove --sync $((X - 5)) $Y
+        elif ([[ $Y -ge $((y_start - CORNER_THRESHOLD)) && $Y -le $((y_start + CORNER_THRESHOLD)) ]] ||
+              [[ $Y -ge $((y_end - CORNER_THRESHOLD)) && $Y -le $((y_end + CORNER_THRESHOLD)) ]]) &&
+              ([[ $X -ge $x_start && $X -le $x_end ]]); then
+            # Halt or slow down the mouse movement
+            xdotool mousemove --sync $X $((Y - 5))
+        fi
+    done
+
+    sleep 0.01 # Check every 10ms
+done
+

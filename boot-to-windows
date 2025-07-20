@@ -1,0 +1,40 @@
+#!/bin/bash
+
+LOGFILE="/tmp/boot-to-windows.log"
+exec > >(tee -a "$LOGFILE") 2>&1
+
+echo "=== $(date) ==="
+echo "[INFO] Searching for Windows menuentry in /boot/grub/grub.cfg..."
+
+# Extract all menuentry names
+readarray -t entries < <(awk -F"'" '/menuentry / {print $2}' /boot/grub/grub.cfg)
+
+windows_entry=""
+for entry in "${entries[@]}"; do
+    if [[ "${entry,,}" == *windows* ]]; then
+        windows_entry="$entry"
+        break
+    fi
+done
+
+if [[ -z "$windows_entry" ]]; then
+    notify-send "Reboot to Windows" "❌ Windows entry not found in GRUB"
+    echo "[ERROR] Windows entry not found"
+    exit 1
+fi
+
+echo "[INFO] Found Windows entry: '$windows_entry'"
+
+# Set Windows for next boot only using full entry name
+if sudo grub-reboot "$windows_entry"; then
+    notify-send "Reboot to Windows" "✅ Will reboot into: $windows_entry"
+    echo "[INFO] grub-reboot successful"
+    echo "[INFO] Rebooting system..."
+    sleep 1
+    systemctl reboot
+else
+    notify-send "Reboot to Windows" "❌ Failed to set grub-reboot"
+    echo "[ERROR] grub-reboot failed"
+    exit 1
+fi
+
