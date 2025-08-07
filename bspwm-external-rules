@@ -1,0 +1,67 @@
+#!/bin/env bash
+
+wid="$1"
+class="$2"
+instance="$3"
+
+# Safely get window role (may be empty)
+window_role="$(xprop -id "$wid" WM_WINDOW_ROLE 2>/dev/null | sed -nE 's/^WM_WINDOW_ROLE\(STRING\) = "(.*)"/\1/p')"
+
+# Normalize class/instance for consistent matching
+class="${class,,}"
+instance="${instance,,}"
+
+# Default rule
+default_rule() {
+    echo "state=tiled"
+}
+
+# Floating windows (by class or instance or role)
+floating_rules() {
+    case "$class:$instance" in
+        gimp:*) echo "state=floating desktop=^8 follow=on" ;;
+        *:picture-in-picture) echo "state=floating sticky=on rectangle=400x225+1520+815" ;;
+        qutebrowser:*) echo "state=floating sticky=on rectangle=1000x560+460+200" ;;
+        mplayer2:*) echo "state=floating" ;;
+        feh:*) echo "state=floating" ;;
+        gnome-calculator:*) echo "state=floating" ;;
+        pavucontrol:*) echo "state=floating" ;;
+        mpv:*) echo "state=floating" ;;
+        blueman-manager:*) echo "state=floating" ;;
+        thunderbird-default:msgcompose) echo "state=floating sticky=on" ;;
+        atcos:*) echo "state=floating follow=on" ;;
+    esac
+
+    # Role-based floating
+    if [[ "$window_role" = "pop-up" ]]; then
+        echo "state=floating"
+    fi
+}
+
+# Focus or manage overrides
+other_rules() {
+    case "$class:$instance" in
+        kupfer.py:*) echo "focus=on" ;;
+        screenkey:*) echo "manage=off" ;;
+    esac
+}
+
+# Tiled desktop placement
+desktop_rules() {
+    case "$class" in
+        alacritty|xterm) echo "desktop=^1 state=tiled" ;;
+        chromium) echo "desktop=^2" ;;
+        firefox-esr|firefox) echo "desktop=^2 follow=off" ;;
+        google-chrome) echo "desktop=^2 follow=off" ;;
+        code) echo "desktop=^3" ;;
+    esac
+}
+
+# Debug log
+echo "$(date) wid=$wid class=$class instance=$instance role=$window_role" >> ~/bin/logs/bspwm-external_rules.log
+
+# Apply all rule sets and exit after the first match
+floating_rules && exit
+other_rules && exit
+desktop_rules && exit
+default_rule
