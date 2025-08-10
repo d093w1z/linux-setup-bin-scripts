@@ -1,67 +1,114 @@
-#!/bin/env bash
+#!/usr/bin/env bash
+# Modular bspwm external rules script
+# - emit() prints to stdout *and* appends to LOG_FILE
+# - each matcher returns 0 if it produced a rule, 1 otherwise
 
-wid="$1"
-class="$2"
-instance="$3"
+LOG_FILE="${HOME}/bin/logs/bspwm-external_rules.log"
+DEBUG_LOG="${HOME}/bin/logs/bspwm-external_rules-debug.log"
 
-# Safely get window role (may be empty)
-window_role="$(xprop -id "$wid" WM_WINDOW_ROLE 2>/dev/null | sed -nE 's/^WM_WINDOW_ROLE\(STRING\) = "(.*)"/\1/p')"
+mkdir -p "$(dirname "$LOG_FILE")" "$(dirname "$DEBUG_LOG")"
 
-# Normalize class/instance for consistent matching
-class="${class,,}"
-instance="${instance,,}"
+# Optional: send xtrace to a separate debug file (keeps rule output clean)
+exec 3>>"$DEBUG_LOG" || true
+BASH_XTRACEFD=3
+set -x
 
-# Default rule
-default_rule() {
-    echo "state=tiled"
+# Positional args (safe defaults)
+wid="${1:-}"
+class="${2:-}"
+instance="${3:-}"
+
+# --- logging / output helpers -------------------------------------------------
+emit() {
+    # print to stdout (for bspwm) and append to logfile
+    # preserve exact single-line output
+    printf '%s\n' "$*" | tee -a "$LOG_FILE"
 }
 
-# Floating windows (by class or instance or role)
-floating_rules() {
-    case "$class:$instance" in
-        gimp:*) echo "state=floating desktop=^8 follow=on" ;;
-        *:picture-in-picture) echo "state=floating sticky=on rectangle=400x225+1520+815" ;;
-        qutebrowser:*) echo "state=floating sticky=on rectangle=1000x560+460+200" ;;
-        mplayer2:*) echo "state=floating" ;;
-        feh:*) echo "state=floating" ;;
-        gnome-calculator:*) echo "state=floating" ;;
-        pavucontrol:*) echo "state=floating" ;;
-        mpv:*) echo "state=floating" ;;
-        blueman-manager:*) echo "state=floating" ;;
-        thunderbird-default:msgcompose) echo "state=floating sticky=on" ;;
-        atcos:*) echo "state=floating follow=on" ;;
-    esac
+debug() {
+    # timestamped debug-only messages
+    printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$DEBUG_LOG"
+}
 
-    # Role-based floating
+# --- utility functions ------------------------------------------------------
+get_window_role() {
+    # safe extraction of WM_WINDOW_ROLE (empty if not present)
+    window_role="$(xprop -id "$wid" WM_WINDOW_ROLE 2>/dev/null \
+        | sed -nE 's/^WM_WINDOW_ROLE\(STRING\) = "(.*)"/\1/p' || true)"
+}
+
+normalize_names() {
+    # lower-case names for simpler matching
+    class="${class,,}"
+    instance="${instance,,}"
+}
+
+# --- rule matchers (return 0 when they emit a rule) -------------------------
+match_floating() {
+    # Role-based floating first (quick exit)
     if [[ "$window_role" = "pop-up" ]]; then
-        echo "state=floating"
+        emit "state=floating"
+        return 0
     fi
-}
 
-# Focus or manage overrides
-other_rules() {
     case "$class:$instance" in
-        kupfer.py:*) echo "focus=on" ;;
-        screenkey:*) echo "manage=off" ;;
+        gimp:*) emit "state=floating desktop=^8 follow=on"; return 0 ;;
+        *:picture-in-picture) emit "state=floating sticky=on rectangle=400x225+1520+815"; return 0 ;;
+        qutebrowser:*) emit "state=floating sticky=on rectangle=1000x560+460+200"; return 0 ;;
+        mplayer2:*) emit "state=floating"; return 0 ;;
+        feh:*) emit "state=floating"; return 0 ;;
+        gnome-calculator:*) emit "state=floating"; return 0 ;;
+        pavucontrol:*) emit "state=floating"; return 0 ;;
+        mpv:*) emit "state=floating"; return 0 ;;
+        blueman-manager:*) emit "state=floating"; return 0 ;;
+        thunderbird-default:msgcompose) emit "state=floating sticky=on"; return 0 ;;
+        atcos:*) emit "state=floating follow=on"; return 0 ;;
     esac
+
+    return 1
 }
 
-# Tiled desktop placement
-desktop_rules() {
+match_other() {
+    case "$class:$instance" in
+        kupfer.py:*) emit "focus=on"; return 0 ;;
+        screenkey:*) emit "manage=off"; return 0 ;;
+    esac
+    return 1
+}
+
+match_desktop() {
     case "$class" in
-        alacritty|xterm) echo "desktop=^1 state=tiled" ;;
-        chromium) echo "desktop=^2" ;;
-        firefox-esr|firefox) echo "desktop=^2 follow=off" ;;
-        google-chrome) echo "desktop=^2 follow=off" ;;
-        code) echo "desktop=^3" ;;
+        alacritty|xterm) emit "desktop=^1 state=tiled follow=on"; return 0 ;;
+        chromium) emit "desktop=^2"; return 0 ;;
+        firefox-esr|firefox) emit "desktop=^2 follow=off"; return 0 ;;
+        google-chrome) emit "desktop=^2 follow=off"; return 0 ;;
+        code) emit "desktop=^3"; return 0 ;;
     esac
+    return 1
 }
 
-# Debug log
-echo "$(date) wid=$wid class=$class instance=$instance role=$window_role" >> ~/bin/logs/bspwm-external_rules.log
+# --- main -------------------------------------------------------------------
+get_window_role
+normalize_names
+debug "wid=$wid class=$class instance=$instance role=$window_role"
 
-# Apply all rule sets and exit after the first match
-floating_rules && exit
-other_rules && exit
-desktop_rules && exit
-default_rule
+# Try matchers in order; exit after first successful match (return code 0)
+if match_floating ; then
+    set +x
+    exit 0
+fi
+
+if match_other ; then
+    set +x
+    exit 0
+fi
+
+if match_desktop ; then
+    set +x
+    exit 0
+fi
+
+# default
+emit "state=tiled"
+set +x
+exit 0
