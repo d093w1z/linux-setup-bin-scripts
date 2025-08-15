@@ -11,9 +11,9 @@ mkdir -p "$(dirname "$LOG_FILE")" "$(dirname "$DEBUG_LOG")"
 # Optional: send xtrace to a separate debug file (keeps rule output clean)
 exec 3>>"$DEBUG_LOG" || true
 BASH_XTRACEFD=3
-set -x
+# Uncomment the next line to enable xtrace debugging
+# set -x
 
-# Positional args (safe defaults)
 wid="${1:-}"
 class="${2:-}"
 instance="${3:-}"
@@ -31,19 +31,66 @@ debug() {
 }
 
 # --- utility functions ------------------------------------------------------
+
+normalize_names() {
+    class="${class,,}"
+    instance="${instance,,}"
+}
+
 get_window_role() {
     # safe extraction of WM_WINDOW_ROLE (empty if not present)
     window_role="$(xprop -id "$wid" WM_WINDOW_ROLE 2>/dev/null \
         | sed -nE 's/^WM_WINDOW_ROLE\(STRING\) = "(.*)"/\1/p' || true)"
 }
 
-normalize_names() {
-    # lower-case names for simpler matching
-    class="${class,,}"
-    instance="${instance,,}"
+get_window_title() {
+    window_title="$(xprop -id "$wid" WM_NAME 2>/dev/null \
+        | sed -nE 's/^WM_NAME\(UTF8_STRING\) = "(.*)"/\1/p' || true)"
+    window_title="${window_title,,}"
+}
+
+get_window_type() {
+    window_types="$(xprop -id "$wid" _NET_WM_WINDOW_TYPE 2>/dev/null \
+        | grep -oE '_NET_WM_WINDOW_TYPE_[^ ,]+' | tr '[:upper:]' '[:lower:]')"
+}
+
+is_transient() {
+    local parent
+    parent=$(xprop -id "$wid" WM_TRANSIENT_FOR 2>/dev/null | awk -F'#' '{gsub(/ /,"",$2); print $2}')
+    [[ -n "$parent" && "$parent" != "0x0" ]]
 }
 
 # --- rule matchers (return 0 when they emit a rule) -------------------------
+
+# --- floating detection (automatic) ---
+match_auto_floating() {
+    # float if transient
+    if is_transient; then
+        debug "Transient window detected: $wid"
+        emit "state=floating"
+        return 0
+    fi
+
+    # float if common floating types
+    for t in $window_types; do
+        case "$t" in
+            *_dialog|*_utility|*_toolbar|*_splash|*_dropdown_menu|*_popup_menu|*_tooltip)
+                emit "state=floating"
+                return 0
+                ;;
+        esac
+    done
+
+    # float if modal or above
+    if xprop -id "$wid" _NET_WM_STATE 2>/dev/null | grep -qE '_NET_WM_STATE_MODAL|_NET_WM_STATE_ABOVE'; then
+        emit "state=floating"
+        return 0
+    fi
+
+    return 1
+}
+
+# --- personal floating overrides ---
 match_floating() {
     # Role-based floating first (quick exit)
     if [[ "$window_role" = "pop-up" ]]; then
@@ -51,10 +98,13 @@ match_floating() {
         return 0
     fi
 
+    if [[ "$window_title" == "picture-in-picture" ]]; then
+        emit "state=floating sticky=on rectangle=400x225+1520+815"
+        return 0
+    fi
+
     case "$class:$instance" in
         gimp:*) emit "state=floating desktop=^8 follow=on"; return 0 ;;
-        *:picture-in-picture) emit "state=floating sticky=on rectangle=400x225+1520+815"; return 0 ;;
-        qutebrowser:*) emit "state=floating sticky=on rectangle=1000x560+460+200"; return 0 ;;
         mplayer2:*) emit "state=floating"; return 0 ;;
         feh:*) emit "state=floating"; return 0 ;;
         gnome-calculator:*) emit "state=floating"; return 0 ;;
@@ -64,10 +114,10 @@ match_floating() {
         thunderbird-default:msgcompose) emit "state=floating sticky=on"; return 0 ;;
         atcos:*) emit "state=floating follow=on"; return 0 ;;
     esac
-
     return 1
 }
 
+# --- other rules ---
 match_other() {
     case "$class:$instance" in
         kupfer.py:*) emit "focus=on"; return 0 ;;
@@ -89,26 +139,16 @@ match_desktop() {
 
 # --- main -------------------------------------------------------------------
 get_window_role
+get_window_title
+get_window_type
 normalize_names
-debug "wid=$wid class=$class instance=$instance role=$window_role"
+debug "wid=$wid class=$class instance=$instance role=$window_role title=$window_title types=$window_types"
 
-# Try matchers in order; exit after first successful match (return code 0)
-if match_floating ; then
-    set +x
-    exit 0
-fi
+if match_auto_floating; then set +x; exit 0; fi
+if match_floating; then set +x; exit 0; fi
+if match_other; then set +x; exit 0; fi
+if match_desktop; then set +x; exit 0; fi
 
-if match_other ; then
-    set +x
-    exit 0
-fi
-
-if match_desktop ; then
-    set +x
-    exit 0
-fi
-
-# default
-emit "state=tiled"
+# no explicit rule: let bspwm decide
 set +x
 exit 0
