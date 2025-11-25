@@ -1,36 +1,34 @@
 #!/usr/bin/env bash
-# Modular bspwm external rules script
-# - emit() prints to stdout *and* appends to LOG_FILE
-# - each matcher returns 0 if it produced a rule, 1 otherwise
+# bspwm external rules with reliable debug logging + improved PiP and dialog detection
 
-LOG_FILE="${HOME}/bin/logs/bspwm-external_rules.log"
-DEBUG_LOG="${HOME}/bin/logs/bspwm-external_rules-debug.log"
+LOG_FILE="$HOME/bin/logs/bspwm-external-rules.log"
+DEBUG_LOG="$HOME/bin/logs/bspwm-external-rules.debug.log"
 
-mkdir -p "$(dirname "$LOG_FILE")" "$(dirname "$DEBUG_LOG")"
+mkdir -p "$(dirname "$LOG_FILE")"
 
-# Optional: send xtrace to a separate debug file (keeps rule output clean)
-exec 3>>"$DEBUG_LOG" || true
-BASH_XTRACEFD=3
-# Uncomment the next line to enable xtrace debugging
-# set -x
+# ---------------- LOGGING ----------------------
 
-wid="${1:-}"
-class="${2:-}"
-instance="${3:-}"
+log_info() {
+    printf '%s [INFO] %s\n' "$(date '+%F %T')" "$*" >> "$LOG_FILE"
+}
 
-# --- logging / output helpers -------------------------------------------------
+log_debug() {
+    printf '%s [DEBUG] %s\n' "$(date '+%F %T')" "$*" >> "$DEBUG_LOG"
+    [[ "$BSPWM_RULES_VERBOSE" = "1" ]] && printf '%s [DEBUG] %s\n' "$(date '+%F %T')" "$*" >> "$LOG_FILE"
+}
+
+log_error() {
+    printf '%s [ERROR] %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG_FILE" >> "$DEBUG_LOG"
+}
+
 emit() {
-    # print to stdout (for bspwm) and append to logfile
-    # preserve exact single-line output
-    printf '%s\n' "$*" | tee -a "$LOG_FILE"
+    # stdout for bspwm
+    printf '%s\n' "$*"
+    # logged with context
+    log_info "emit: $*  (wid=$wid class=$class instance=$instance title=$window_title role=$window_role types=$window_types)"
 }
 
-debug() {
-    # timestamped debug-only messages
-    printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$DEBUG_LOG"
-}
-
-# --- utility functions ------------------------------------------------------
+# ---------------- WINDOW PROPERTIES ----------------------
 
 normalize_names() {
     class="${class,,}"
@@ -38,15 +36,20 @@ normalize_names() {
 }
 
 get_window_role() {
-    # safe extraction of WM_WINDOW_ROLE (empty if not present)
     window_role="$(xprop -id "$wid" WM_WINDOW_ROLE 2>/dev/null \
-        | sed -nE 's/^WM_WINDOW_ROLE\(STRING\) = "(.*)"/\1/p' || true)"
+        | sed -nE 's/.*"(.*)".*/\1/p' | tr '[:upper:]' '[:lower:]')"
 }
 
 get_window_title() {
     window_title="$(xprop -id "$wid" WM_NAME 2>/dev/null \
-        | sed -nE 's/^WM_NAME\(UTF8_STRING\) = "(.*)"/\1/p' || true)"
+        | sed -nE 's/.*"(.*)".*/\1/p')"
     window_title="${window_title,,}"
+
+    [[ -z "$window_title" ]] && {
+        window_title="$(xprop -id "$wid" _NET_WM_NAME 2>/dev/null \
+            | sed -nE 's/.*"(.*)".*/\1/p')"
+        window_title="${window_title,,}"
+    }
 }
 
 get_window_type() {
@@ -56,33 +59,47 @@ get_window_type() {
 
 is_transient() {
     local parent
-    parent=$(xprop -id "$wid" WM_TRANSIENT_FOR 2>/dev/null | awk -F'#' '{gsub(/ /,"",$2); print $2}')
+    parent="$(xprop -id "$wid" WM_TRANSIENT_FOR 2>/dev/null | grep -o '0x.*')"
     [[ -n "$parent" && "$parent" != "0x0" ]]
 }
 
-# --- rule matchers (return 0 when they emit a rule) -------------------------
+# ---------------- IMPROVED MATCHERS ----------------------
 
-# --- floating detection (automatic) ---
-match_auto_floating() {
-    # float if transient
-    if is_transient; then
-        debug "Transient window detected: $wid"
-        emit "state=floating"
-        return 0
+is_dialog_like() {
+    # reliable GTK/Qt/Electron dialog detection
+    grep -q '_net_wm_window_type_dialog' <<< "$window_types" && return 0
+    grep -q '_net_wm_window_type_modal_dialog' <<< "$window_types" && return 0
+    grep -q '_net_wm_window_type_utility' <<< "$window_types" && return 0
+    is_transient && return 0
+
+    # modal state (rare but used by Firefox)
+    xprop -id "$wid" _NET_WM_STATE 2>/dev/null \
+        | grep -qi '_NET_WM_STATE_MODAL' && return 0
+
+    return 1
+}
+
+is_picture_in_picture() {
+    # Firefox PiP variations
+    [[ "$window_role" == "pictureinpicture" ]] && return 0
+    [[ "$window_title" == "picture-in-picture" ]] && return 0
+    [[ "$window_title" == *"pip"* ]] && return 0
+
+    # Chromium/Firefox utility type
+    grep -q '_net_wm_window_type_utility' <<< "$window_types" || return 1
+
+    # Sometimes PiP are small windows (<500px wide)
+    # Avoid calling xwininfo for every window
+    if size=$(xwininfo -id "$wid" 2>/dev/null | grep 'Width' | awk '{print $2}'); then
+        [[ "$size" -lt 500 ]] && return 0
     fi
 
-    # float if common floating types
-    for t in $window_types; do
-        case "$t" in
-            *_dialog|*_utility|*_toolbar|*_splash|*_dropdown_menu|*_popup_menu|*_tooltip)
-                emit "state=floating"
-                return 0
-                ;;
-        esac
-    done
+    return 1
+}
 
-    # float if modal or above
-    if xprop -id "$wid" _NET_WM_STATE 2>/dev/null | grep -qE '_NET_WM_STATE_MODAL|_NET_WM_STATE_ABOVE'; then
+match_auto_floating() {
+    if is_dialog_like; then
+        log_debug "Dialog detected -> float (wid=$wid)"
         emit "state=floating"
         return 0
     fi
@@ -90,16 +107,10 @@ match_auto_floating() {
     return 1
 }
 
-# --- personal floating overrides ---
 match_floating() {
-    # Role-based floating first (quick exit)
-    if [[ "$window_role" = "pop-up" ]]; then
-        emit "state=floating"
-        return 0
-    fi
-
-    if [[ "$window_title" == "picture-in-picture" ]]; then
-        emit "state=floating sticky=on rectangle=400x225+1520+815"
+    if is_picture_in_picture; then
+        log_debug "PiP detected (wid=$wid)"
+        emit "state=floating sticky=on border=off rectangle=400x225+1520+815"
         return 0
     fi
 
@@ -112,12 +123,12 @@ match_floating() {
         mpv:*) emit "state=floating"; return 0 ;;
         blueman-manager:*) emit "state=floating"; return 0 ;;
         thunderbird-default:msgcompose) emit "state=floating sticky=on"; return 0 ;;
+        focotimer:*) emit "state=floating border=off focus=off rectangle=300x300+1520+450"; return 0 ;;
         atcos:*) emit "state=floating follow=on"; return 0 ;;
     esac
     return 1
 }
 
-# --- other rules ---
 match_other() {
     case "$class:$instance" in
         kupfer.py:*) emit "focus=on"; return 0 ;;
@@ -128,27 +139,30 @@ match_other() {
 
 match_desktop() {
     case "$class" in
-        alacritty|xterm) emit "desktop=^1 state=tiled follow=on"; return 0 ;;
-        chromium) emit "desktop=^2"; return 0 ;;
-        firefox-esr|firefox) emit "desktop=^2 follow=off"; return 0 ;;
-        google-chrome) emit "desktop=^2 follow=off"; return 0 ;;
+        firefox|firefox-esr|google-chrome|chromium) emit "desktop=^2 follow=off"; return 0 ;;
+        alacritty|xterm) emit "desktop=^1"; return 0 ;;
         code) emit "desktop=^3"; return 0 ;;
     esac
     return 1
 }
 
-# --- main -------------------------------------------------------------------
+# ---------------- MAIN ----------------------
+
+wid="$1"
+class="$2"
+instance="$3"
+
 get_window_role
 get_window_title
 get_window_type
 normalize_names
-debug "wid=$wid class=$class instance=$instance role=$window_role title=$window_title types=$window_types"
 
-if match_auto_floating; then set +x; exit 0; fi
-if match_floating; then set +x; exit 0; fi
-if match_other; then set +x; exit 0; fi
-if match_desktop; then set +x; exit 0; fi
+log_debug "NEW WINDOW wid=$wid class=$class instance=$instance role=$window_role title=$window_title types=$window_types"
 
-# no explicit rule: let bspwm decide
-set +x
+match_auto_floating
+match_floating && exit 0
+match_other && exit 0
+match_desktop && exit 0
+
 exit 0
+
