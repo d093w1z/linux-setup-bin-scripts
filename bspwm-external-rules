@@ -110,7 +110,7 @@ match_auto_floating() {
 match_floating() {
     if is_picture_in_picture; then
         log_debug "PiP detected (wid=$wid)"
-        emit "state=floating sticky=on border=off rectangle=400x225+1520+830"
+        emit "state=floating sticky=on border=off rectangle=640x360+1280+700"
         return 0
     fi
 
